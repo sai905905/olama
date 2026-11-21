@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Local RAG + Llama Console</title>
+    <title>Local RAG + Web + Llama Console</title>
     <style>
         :root {
             --bg: #0b1120;
@@ -15,7 +15,7 @@
             --muted: #94a3b8;
             --blue: #3b82f6;
             --green: #10b981;
-            --purple: #8b5cf6;
+            --amber: #f59e0b;
         }
 
         * {
@@ -77,21 +77,22 @@
             background: var(--blue);
             color: #fff;
             border: none;
-            padding: 9px 14px;
+            padding: 8px 13px;
             border-radius: 8px;
-            font-size: 13px;
+            font-size: 12.5px;
             font-weight: 600;
             cursor: pointer;
         }
 
         button:hover {
-            opacity: 0.92;
+            opacity: 0.9;
         }
 
         button.save-btn {
             background: var(--green);
             color: #052e16;
             width: 100%;
+            font-size: 13px;
         }
 
         button.ghost {
@@ -99,6 +100,14 @@
             border: 1px solid var(--border);
             padding: 5px 10px;
             font-size: 12px;
+        }
+
+        button.web-btn {
+            background: #0284c7;
+        }
+
+        button.llm-btn {
+            background: #7c3aed;
         }
 
         #memory-list {
@@ -172,7 +181,7 @@
         }
 
         .msg {
-            max-width: 78%;
+            max-width: 80%;
             padding: 12px 16px;
             border-radius: 12px;
             font-size: 14px;
@@ -200,18 +209,50 @@
             font-weight: 600;
         }
 
+        .fallback-bar {
+            margin-top: 12px;
+            padding: 10px;
+            border-radius: 8px;
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid var(--border);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .fallback-label {
+            width: 100%;
+            font-size: 12px;
+            color: #fcd34d;
+            margin-bottom: 2px;
+        }
+
         .sources {
             margin-top: 10px;
             padding-top: 8px;
             border-top: 1px dashed var(--border);
-            font-size: 12px;
+            font-size: 11.5px;
             color: #86efac;
+            word-break: break-word;
         }
 
         footer {
             background: var(--panel);
             border-top: 1px solid var(--border);
             padding: 14px 20px;
+        }
+
+        .quick-options {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+            align-items: center;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .input-row {
             display: flex;
             gap: 10px;
         }
@@ -247,13 +288,14 @@
         <header>
             <div>
                 <strong>Local AI Workspace</strong>
-                <span id="flow-label" class="pipeline-pill" style="margin-left:10px;">UI → ChromaDB (RAG) → Llama
-                    3.1:8b</span>
+                <span id="flow-label" class="pipeline-pill" style="margin-left:10px;">1. Check ChromaDB → 2. Offer Llama
+                    / Web Search</span>
             </div>
             <div style="display:flex; gap:8px; align-items:center;">
                 <select id="mode" onchange="updateFlowLabel()">
-                    <option value="rag">RAG Mode (ChromaDB + Llama 3.1)</option>
-                    <option value="direct">Direct Mode (Raw Llama 3.1 Only)</option>
+                    <option value="rag">Smart RAG (DB First + Fallback Options)</option>
+                    <option value="web">Internet & News Search (Web RAG)</option>
+                    <option value="direct">Llama 3.1 Model Only (No DB/Web)</option>
                 </select>
                 <button class="ghost" onclick="document.getElementById('chat').innerHTML=''">Clear Chat</button>
             </div>
@@ -262,25 +304,46 @@
         <div id="chat">
             <div class="msg bot">
                 <div class="meta">SYSTEM READY</div>
-                Connected to FastAPI (port 5000). Use <b>RAG Mode</b> to query your stored ChromaDB facts & stock notes,
-                or switch to <b>Direct Mode</b> for general Llama 3.1 chat.
+                Ask anything below. By default, I check your <b>ChromaDB</b> first—if it's not saved there, I'll give
+                you one-click options to ask <b>Llama 3.1</b> or search the <b>Live Internet & News</b>.
             </div>
         </div>
 
         <footer>
-            <input type="text" id="prompt" placeholder="Ask about your stored facts, watchlist, or general questions..."
-                onkeydown="if(event.key==='Enter') sendQuery()" />
-            <button onclick="sendQuery()">Send</button>
+            <div class="quick-options">
+                <span>Search source:</span>
+                <button class="ghost" onclick="setMode('rag')">1. ChromaDB First</button>
+                <button class="ghost" onclick="setMode('direct')">2. Llama 3.1 Model</button>
+                <button class="ghost" onclick="setMode('web')">3. Internet & News</button>
+            </div>
+            <div class="input-row">
+                <input type="text" id="prompt" placeholder="Ask about your stored facts, watchlist, or latest news..."
+                    onkeydown="if(event.key==='Enter') sendQuery()" />
+                <button onclick="sendQuery()">Send</button>
+            </div>
         </footer>
     </main>
 
     <script>
         const API = "http://localhost:5000";
 
+        function setMode(val) {
+            document.getElementById("mode").value = val;
+            updateFlowLabel();
+        }
+
         function updateFlowLabel() {
             const mode = document.getElementById("mode").value;
-            document.getElementById("flow-label").textContent =
-                mode === "rag" ? "UI → ChromaDB (RAG) → Llama 3.1:8b" : "UI → Direct Llama 3.1:8b (No DB)";
+            const labels = {
+                rag: "1. Check ChromaDB → 2. Offer Llama / Web Search",
+                web: "UI → Live Internet & News → Llama 3.1 Summary",
+                direct: "UI → Direct Llama 3.1:8b Model"
+            };
+            document.getElementById("flow-label").textContent = labels[mode];
+        }
+
+        function escapeHtml(str) {
+            return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         }
 
         async function loadMemories() {
@@ -291,8 +354,8 @@
                 document.getElementById("mem-count").textContent = `${data.count} items`;
                 list.innerHTML = data.items.map(item => `
         <div class="mem-item">
-          <div class="mem-id">${item.id}</div>
-          ${item.text.replace(/</g, "&lt;")}
+          <div class="mem-id">${escapeHtml(item.id)}</div>
+          ${escapeHtml(item.text)}
         </div>
       `).join("");
             } catch {
@@ -300,11 +363,11 @@
             }
         }
 
-        async function saveMemory() {
+        async function saveMemory(customFact = null) {
             const input = document.getElementById("fact-input");
-            const fact = input.value.trim();
+            const fact = (customFact || input.value).trim();
             if (!fact) return;
-            input.value = "";
+            if (!customFact) input.value = "";
             await fetch(`${API}/remember`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -313,18 +376,39 @@
             loadMemories();
         }
 
-        function addBubble(sender, text, isUser = false, sources = []) {
+        function addBubble(sender, htmlContent, isUser = false) {
             const chat = document.getElementById("chat");
             const div = document.createElement("div");
             div.className = "msg " + (isUser ? "user" : "bot");
-            let srcHtml = "";
-            if (sources && sources.length > 0) {
-                srcHtml = `<div class="sources"><b>Retrieved from ChromaDB:</b><br>• ${sources.map(s => s.replace(/</g, "&lt;")).join("<br>• ")}</div>`;
-            }
-            div.innerHTML = `<div class="meta">${sender}</div>${text.replace(/</g, "&lt;")}${srcHtml}`;
+            div.innerHTML = `<div class="meta">${sender}</div>${htmlContent}`;
             chat.appendChild(div);
             chat.scrollTop = chat.scrollHeight;
             return div;
+        }
+
+        async function runFallback(type, encodedQuestion, btnEl) {
+            const question = decodeURIComponent(encodedQuestion);
+            const label = type === "web" ? "INTERNET & NEWS RAG → LLAMA 3.1" : "DIRECT LLAMA 3.1 MODEL";
+            const endpoint = type === "web" ? "/web-rag" : "/ask";
+            const botDiv = addBubble(label, type === "web" ? "Searching internet & news, then summarizing..." : "Asking Llama 3.1...");
+
+            try {
+                const res = await fetch(`${API}${endpoint}`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ question })
+                });
+                const data = await res.json();
+                let srcHtml = "";
+                if (data.sources && data.sources.length > 0) {
+                    srcHtml = `<div class="sources"><b>Internet / News Sources:</b><br>• ${data.sources.map(escapeHtml).join("<br>• ")}</div>`;
+                }
+                const saveSnippet = encodeURIComponent(`${question} -> ${data.response}`);
+                const saveBtn = `<div style="margin-top:10px;"><button class="ghost" onclick="saveMemory(decodeURIComponent('${saveSnippet}')); this.textContent='Saved to ChromaDB!'">+ Save Answer to ChromaDB</button></div>`;
+                botDiv.innerHTML = `<div class="meta">${label}</div>${escapeHtml(data.response)}${srcHtml}${saveBtn}`;
+            } catch {
+                botDiv.innerHTML = `<div class="meta">ERROR</div>Server offline. Run <b>python server.py</b>.`;
+            }
         }
 
         async function sendQuery() {
@@ -334,24 +418,42 @@
             promptEl.value = "";
 
             const mode = document.getElementById("mode").value;
-            addBubble("YOU", text, true);
-            const botDiv = addBubble(mode === "rag" ? "CHROMA RAG → LLAMA 3.1" : "DIRECT LLAMA 3.1", "Thinking...");
+            addBubble("YOU", escapeHtml(text), true);
 
+            if (mode === "web" || mode === "direct") {
+                await runFallback(mode, encodeURIComponent(text));
+                return;
+            }
+
+            const botDiv = addBubble("CHROMA RAG → LLAMA 3.1", "Searching ChromaDB...");
             try {
-                const endpoint = mode === "rag" ? "/rag-ask" : "/direct-ask";
-                const res = await fetch(`${API}${endpoint}`, {
+                const res = await fetch(`${API}/rag-ask`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ question: text })
                 });
                 const data = await res.json();
-                let srcHtml = "";
-                if (data.sources && data.sources.length > 0) {
-                    srcHtml = `<div class="sources"><b>Retrieved from ChromaDB:</b><br>• ${data.sources.map(s => s.replace(/</g, "&lt;")).join("<br>• ")}</div>`;
+
+                let fallbackHtml = "";
+                if (data.found_in_db === false) {
+                    const enc = encodeURIComponent(text);
+                    fallbackHtml = `
+          <div class="fallback-bar">
+            <div class="fallback-label">Not found in your local ChromaDB. Where should I look next?</div>
+            <button class="llm-btn" onclick="runFallback('direct', '${enc}', this)">Ask Llama 3.1 Model</button>
+            <button class="web-btn" onclick="runFallback('web', '${enc}', this)">Search Internet & News</button>
+          </div>
+        `;
                 }
-                botDiv.innerHTML = `<div class="meta">${mode === "rag" ? "CHROMA RAG → LLAMA 3.1" : "DIRECT LLAMA 3.1"}</div>${data.response.replace(/</g, "&lt;")}${srcHtml}`;
+
+                let srcHtml = "";
+                if (data.found_in_db && data.sources && data.sources.length > 0) {
+                    srcHtml = `<div class="sources"><b>Matched in ChromaDB:</b><br>• ${data.sources.map(escapeHtml).join("<br>• ")}</div>`;
+                }
+
+                botDiv.innerHTML = `<div class="meta">CHROMA RAG → LLAMA 3.1</div>${escapeHtml(data.response)}${fallbackHtml}${srcHtml}`;
             } catch {
-                botDiv.innerHTML = `<div class="meta">ERROR</div>Server offline. Run <b>python server.py</b> in your VS Code terminal.`;
+                botDiv.innerHTML = `<div class="meta">ERROR</div>Server offline. Run <b>python server.py</b> in VS Code.`;
             }
         }
 

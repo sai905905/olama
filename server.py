@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import chromadb
 import ollama
+from ddgs import DDGS
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -42,7 +43,30 @@ def topic(data: dict):
     return ask_llama(f"Discuss this topic concisely: {data.get('topic', '')}")
 
 
-# --- New ChromaDB + RAG APIs ---
+# --- ChromaDB + Smart Fallback RAG + Internet Search APIs ---
+
+# Add a dedicated collection for global behavior rules
+rules_collection = chroma_client.get_or_create_collection(name="system_rules")
+
+
+@app.get("/rules")
+def get_rules():
+    return {"rules": rules_collection.get(include=["documents"])["documents"]}
+
+
+@app.post("/rules")
+def add_rule(data: dict):
+    rule = data.get("rule", "").strip()
+    if rule:
+        rules_collection.upsert(ids=[f"rule_{int(time.time() * 1000)}"], documents=[rule])
+    return get_rules()
+
+
+def get_active_system_prompt(extra_instruction: str = "") -> str:
+    saved_rules = rules_collection.get(include=["documents"])["documents"]
+    rules_text = "\n".join(f"- {r}" for r in saved_rules) if saved_rules else "- Keep replies concise and realistic."
+    return f"Follow these permanent user rules strictly:\n{rules_text}\n{extra_instruction}"
+
 @app.get("/memories")
 def list_memories():
     data = collection.get(include=["documents"])
@@ -72,7 +96,11 @@ def rag_ask(data: dict):
     question = data.get("question", "").strip()
     count = collection.count()
     if count == 0:
-        return {"response": "ChromaDB is empty. Save a fact first!", "sources": []}
+        return {
+            "response": "I don't have that stored in ChromaDB yet.",
+            "found_in_db": False,
+            "sources": [],
+        }
 
     q_emb = get_embedding(question)
     results = collection.query(
@@ -89,8 +117,8 @@ def rag_ask(data: dict):
                 "role": "system",
                 "content": (
                     "You are a precise personal & market assistant. "
-                    "Answer the user's question clearly and concisely using ONLY the retrieved ChromaDB context below. "
-                    "If the answer is not in the context, say you don't have that stored yet."
+                    "Answer the question ONLY if the answer is explicitly supported by the Stored Context below. "
+                    "If the Stored Context does NOT contain the answer, reply with the exact phrase: NOT_FOUND_IN_DB"
                 ),
             },
             {
@@ -100,9 +128,74 @@ def rag_ask(data: dict):
         ],
         options={"temperature": 0},
     )
+    answer = res["message"]["content"].strip()
+    if "NOT_FOUND_IN_DB" in answer:
+        return {
+            "response": "I couldn't find this in your local ChromaDB memory.",
+            "found_in_db": False,
+            "sources": retrieved_docs,
+        }
+
+    return {
+        "response": answer,
+        "found_in_db": True,
+        "sources": retrieved_docs,
+    }
+
+
+@app.post("/web-rag")
+def web_rag(data: dict):
+    question = data.get("question", "").strip()
+    snippets = []
+    sources = []
+
+    try:
+        with DDGS() as ddgs:
+            # Fetch top web results + latest news
+            web_results = list(ddgs.text(question, max_results=3))
+            news_results = list(ddgs.news(question, max_results=2))
+
+        for r in web_results:
+            title = r.get("title", "")
+            body = r.get("body", "")
+            href = r.get("href", "")
+            snippets.append(f"[Web] {title}: {body}")
+            sources.append(f"{title} ({href})")
+
+        for n in news_results:
+            title = n.get("title", "")
+            body = n.get("body", "")
+            url = n.get("url", "")
+            date = n.get("date", "")
+            snippets.append(f"[News {date}] {title}: {body}")
+            sources.append(f"[News] {title} ({url})")
+    except Exception as e:
+        return {"response": f"Internet search failed: {e}", "sources": []}
+
+    if not snippets:
+        return {"response": "No live internet results found for that query.", "sources": []}
+
+    web_context = "\n".join(snippets)
+    res = ollama.chat(
+        model="llama3.1:8b",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a helpful research assistant. Summarize a clear, accurate answer to the user's question "
+                    "using ONLY the live Internet & News search results provided below."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Live Search Results:\n{web_context}\n\nQuestion: {question}",
+            },
+        ],
+        options={"temperature": 0.2},
+    )
     return {
         "response": res["message"]["content"],
-        "sources": retrieved_docs,
+        "sources": sources,
     }
 
 
