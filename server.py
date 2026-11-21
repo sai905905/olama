@@ -6,23 +6,45 @@ import ollama
 from ddgs import DDGS
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Persistent local ChromaDB folder
+# Persistent local ChromaDB storage
 chroma_client = chromadb.PersistentClient(path="./test_chroma_db")
 collection = chroma_client.get_or_create_collection(name="verify_rag")
-
-
-def ask_llama(prompt: str):
-    res = ollama.chat(model="llama3.1:8b", messages=[{"role": "user", "content": prompt}])
-    return {"response": res["message"]["content"]}
+rules_collection = chroma_client.get_or_create_collection(name="system_rules")
 
 
 def get_embedding(text: str):
     return ollama.embed(model="nomic-embed-text", input=text)["embeddings"][0]
 
 
-# --- Existing APIs (Unchanged) ---
+def get_active_system_prompt(extra_instruction: str = "") -> str:
+    saved_rules = rules_collection.get(include=["documents"]).get("documents", [])
+    rules_text = (
+        "\n".join(f"- {r}" for r in saved_rules)
+        if saved_rules
+        else "- Keep replies concise, direct, and realistic."
+    )
+    return f"Follow these permanent user rules strictly:\n{rules_text}\n{extra_instruction}".strip()
+
+
+def ask_llama(prompt: str):
+    res = ollama.chat(
+        model="llama3.1:8b",
+        messages=[
+            {"role": "system", "content": get_active_system_prompt()},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    return {"response": res["message"]["content"]}
+
+
+# --- Existing APIs (Unchanged Routes + Global Rules Active) ---
 @app.get("/learn")
 def learn():
     return {"about": "Local Llama 3.1:8b API running on FastAPI"}
@@ -43,30 +65,35 @@ def topic(data: dict):
     return ask_llama(f"Discuss this topic concisely: {data.get('topic', '')}")
 
 
-# --- ChromaDB + Smart Fallback RAG + Internet Search APIs ---
-
-# Add a dedicated collection for global behavior rules
-rules_collection = chroma_client.get_or_create_collection(name="system_rules")
-
-
+# --- Global Rules APIs ---
 @app.get("/rules")
 def get_rules():
-    return {"rules": rules_collection.get(include=["documents"])["documents"]}
+    data = rules_collection.get(include=["documents"])
+    items = [
+        {"id": rule_id, "rule": rule_text}
+        for rule_id, rule_text in zip(data["ids"], data["documents"])
+    ]
+    return {"count": len(items), "rules": data["documents"], "items": items}
 
 
 @app.post("/rules")
 def add_rule(data: dict):
     rule = data.get("rule", "").strip()
     if rule:
-        rules_collection.upsert(ids=[f"rule_{int(time.time() * 1000)}"], documents=[rule])
+        rules_collection.upsert(
+            ids=[f"rule_{int(time.time() * 1000)}"],
+            documents=[rule],
+        )
     return get_rules()
 
 
-def get_active_system_prompt(extra_instruction: str = "") -> str:
-    saved_rules = rules_collection.get(include=["documents"])["documents"]
-    rules_text = "\n".join(f"- {r}" for r in saved_rules) if saved_rules else "- Keep replies concise and realistic."
-    return f"Follow these permanent user rules strictly:\n{rules_text}\n{extra_instruction}"
+@app.delete("/rules/{rule_id}")
+def delete_rule(rule_id: str):
+    rules_collection.delete(ids=[rule_id])
+    return get_rules()
 
+
+# --- ChromaDB Memory & RAG APIs ---
 @app.get("/memories")
 def list_memories():
     data = collection.get(include=["documents"])
@@ -115,8 +142,7 @@ def rag_ask(data: dict):
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "You are a precise personal & market assistant. "
+                "content": get_active_system_prompt(
                     "Answer the question ONLY if the answer is explicitly supported by the Stored Context below. "
                     "If the Stored Context does NOT contain the answer, reply with the exact phrase: NOT_FOUND_IN_DB"
                 ),
@@ -143,6 +169,7 @@ def rag_ask(data: dict):
     }
 
 
+# --- Internet & News Search RAG API ---
 @app.post("/web-rag")
 def web_rag(data: dict):
     question = data.get("question", "").strip()
@@ -151,7 +178,6 @@ def web_rag(data: dict):
 
     try:
         with DDGS() as ddgs:
-            # Fetch top web results + latest news
             web_results = list(ddgs.text(question, max_results=3))
             news_results = list(ddgs.news(question, max_results=2))
 
@@ -181,9 +207,8 @@ def web_rag(data: dict):
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "You are a helpful research assistant. Summarize a clear, accurate answer to the user's question "
-                    "using ONLY the live Internet & News search results provided below."
+                "content": get_active_system_prompt(
+                    "Summarize a clear, accurate answer to the user's question using ONLY the live Internet & News search results provided below."
                 ),
             },
             {

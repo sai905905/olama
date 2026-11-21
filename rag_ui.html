@@ -15,7 +15,8 @@
             --muted: #94a3b8;
             --blue: #3b82f6;
             --green: #10b981;
-            --amber: #f59e0b;
+            --purple: #8b5cf6;
+            --red: #ef4444;
         }
 
         * {
@@ -32,19 +33,19 @@
             display: flex;
         }
 
-        /* Left Sidebar: ChromaDB Memory Store */
         aside {
-            width: 310px;
+            width: 320px;
             background: var(--panel);
             border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
-            padding: 16px;
-            gap: 14px;
+            padding: 14px;
+            gap: 10px;
+            overflow-y: auto;
         }
 
         aside h2 {
-            font-size: 15px;
+            font-size: 14px;
             color: #e2e8f0;
             display: flex;
             justify-content: space-between;
@@ -60,24 +61,32 @@
             color: var(--green);
         }
 
-        textarea {
+        .badge.purple {
+            color: #c4b5fd;
+        }
+
+        textarea,
+        input.rule-box {
             width: 100%;
-            height: 74px;
             background: var(--bg);
             color: var(--text);
             border: 1px solid var(--border);
             border-radius: 8px;
-            padding: 10px;
-            font-size: 13px;
-            resize: none;
+            padding: 8px 10px;
+            font-size: 12.5px;
             outline: none;
+        }
+
+        textarea {
+            height: 62px;
+            resize: none;
         }
 
         button {
             background: var(--blue);
             color: #fff;
             border: none;
-            padding: 8px 13px;
+            padding: 8px 12px;
             border-radius: 8px;
             font-size: 12.5px;
             font-weight: 600;
@@ -92,50 +101,63 @@
             background: var(--green);
             color: #052e16;
             width: 100%;
-            font-size: 13px;
+        }
+
+        button.rule-btn {
+            background: var(--purple);
+            color: #fff;
+            width: 100%;
         }
 
         button.ghost {
             background: var(--card);
             border: 1px solid var(--border);
-            padding: 5px 10px;
-            font-size: 12px;
+            padding: 4px 9px;
+            font-size: 11.5px;
         }
 
-        button.web-btn {
-            background: #0284c7;
+        button.del-btn {
+            background: transparent;
+            color: var(--red);
+            padding: 0 4px;
+            font-size: 13px;
         }
 
-        button.llm-btn {
-            background: #7c3aed;
-        }
-
-        #memory-list {
-            flex: 1;
+        .list-box {
+            max-height: 180px;
             overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 6px;
         }
 
         .mem-item {
             background: var(--card);
             border: 1px solid var(--border);
             border-radius: 8px;
-            padding: 9px 11px;
+            padding: 8px 10px;
             font-size: 12px;
             line-height: 1.4;
             color: #cbd5e1;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 6px;
         }
 
         .mem-id {
             font-size: 10px;
             color: var(--muted);
-            margin-bottom: 3px;
+            margin-bottom: 2px;
             font-family: monospace;
         }
 
-        /* Main Chat Area */
+        hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 4px 0;
+        }
+
         main {
             flex: 1;
             display: flex;
@@ -273,15 +295,23 @@
 <body>
 
     <aside>
+        <h2>Global AI Rules <span id="rule-count" class="badge purple">0 rules</span></h2>
+        <input type="text" id="rule-input" class="rule-box"
+            placeholder="e.g. 'Keep replies under 2 lines & be realistic'"
+            onkeydown="if(event.key==='Enter') saveRule()" />
+        <button class="rule-btn" onclick="saveRule()">+ Add Active Rule</button>
+        <div id="rules-list" class="list-box"></div>
+
+        <hr />
+
         <h2>ChromaDB Memory <span id="mem-count" class="badge">0 items</span></h2>
-        <textarea id="fact-input"
-            placeholder="Save a permanent fact (e.g. 'Sathvika is my wife' or 'TCS target is ₹4200')..."></textarea>
+        <textarea id="fact-input" placeholder="Save a permanent fact (e.g. 'Sathvika is my wife')..."></textarea>
         <button class="save-btn" onclick="saveMemory()">+ Save to ChromaDB</button>
         <div style="display:flex; justify-content:space-between; align-items:center;">
-            <span style="font-size:12px; color:var(--muted);">Stored Records</span>
-            <button class="ghost" onclick="loadMemories()">Refresh</button>
+            <span style="font-size:11.5px; color:var(--muted);">Stored Records</span>
+            <button class="ghost" onclick="loadAll()">Refresh</button>
         </div>
-        <div id="memory-list"></div>
+        <div id="memory-list" class="list-box" style="max-height:none; flex:1;"></div>
     </aside>
 
     <main>
@@ -304,8 +334,8 @@
         <div id="chat">
             <div class="msg bot">
                 <div class="meta">SYSTEM READY</div>
-                Ask anything below. By default, I check your <b>ChromaDB</b> first—if it's not saved there, I'll give
-                you one-click options to ask <b>Llama 3.1</b> or search the <b>Live Internet & News</b>.
+                Your <b>Global AI Rules</b> apply automatically to every reply across ChromaDB RAG, Live Web Search, and
+                Direct Llama 3.1.
             </div>
         </div>
 
@@ -346,6 +376,41 @@
             return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
         }
 
+        async function loadRules() {
+            const list = document.getElementById("rules-list");
+            try {
+                const res = await fetch(`${API}/rules`);
+                const data = await res.json();
+                document.getElementById("rule-count").textContent = `${data.count} rules`;
+                list.innerHTML = data.items.map(item => `
+        <div class="mem-item">
+          <span>${escapeHtml(item.rule)}</span>
+          <button class="del-btn" title="Delete rule" onclick="deleteRule('${item.id}')">✕</button>
+        </div>
+      `).join("");
+            } catch {
+                list.innerHTML = "";
+            }
+        }
+
+        async function saveRule() {
+            const input = document.getElementById("rule-input");
+            const rule = input.value.trim();
+            if (!rule) return;
+            input.value = "";
+            await fetch(`${API}/rules`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ rule })
+            });
+            loadRules();
+        }
+
+        async function deleteRule(ruleId) {
+            await fetch(`${API}/rules/${ruleId}`, { method: "DELETE" });
+            loadRules();
+        }
+
         async function loadMemories() {
             const list = document.getElementById("memory-list");
             try {
@@ -354,13 +419,20 @@
                 document.getElementById("mem-count").textContent = `${data.count} items`;
                 list.innerHTML = data.items.map(item => `
         <div class="mem-item">
-          <div class="mem-id">${escapeHtml(item.id)}</div>
-          ${escapeHtml(item.text)}
+          <div>
+            <div class="mem-id">${escapeHtml(item.id)}</div>
+            ${escapeHtml(item.text)}
+          </div>
         </div>
       `).join("");
             } catch {
                 list.innerHTML = `<div class="mem-item" style="color:#fca5a5;">Cannot reach localhost:5000. Run <b>python server.py</b> first.</div>`;
             }
+        }
+
+        function loadAll() {
+            loadRules();
+            loadMemories();
         }
 
         async function saveMemory(customFact = null) {
@@ -386,7 +458,7 @@
             return div;
         }
 
-        async function runFallback(type, encodedQuestion, btnEl) {
+        async function runFallback(type, encodedQuestion) {
             const question = decodeURIComponent(encodedQuestion);
             const label = type === "web" ? "INTERNET & NEWS RAG → LLAMA 3.1" : "DIRECT LLAMA 3.1 MODEL";
             const endpoint = type === "web" ? "/web-rag" : "/ask";
@@ -440,8 +512,8 @@
                     fallbackHtml = `
           <div class="fallback-bar">
             <div class="fallback-label">Not found in your local ChromaDB. Where should I look next?</div>
-            <button class="llm-btn" onclick="runFallback('direct', '${enc}', this)">Ask Llama 3.1 Model</button>
-            <button class="web-btn" onclick="runFallback('web', '${enc}', this)">Search Internet & News</button>
+            <button style="background:#7c3aed" onclick="runFallback('direct', '${enc}')">Ask Llama 3.1 Model</button>
+            <button style="background:#0284c7" onclick="runFallback('web', '${enc}')">Search Internet & News</button>
           </div>
         `;
                 }
@@ -457,7 +529,7 @@
             }
         }
 
-        loadMemories();
+        loadAll();
     </script>
 </body>
 
