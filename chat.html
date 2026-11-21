@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Local AI Console</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    select,
+    input[type="text"] {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 7px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      outline: none;
+    }
+
+    button {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 7px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: var(--accent-hover);
+    }
+
+    button.secondary {
+      background: #334155;
+    }
+
+    #chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      max-width: 900px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    .msg {
+      padding: 12px 16px;
+      border-radius: 10px;
+      max-width: 80%;
+      line-height: 1.5;
+      font-size: 14px;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    .user {
+      background: var(--accent);
+      align-self: flex-end;
+      border-bottom-right-radius: 2px;
+    }
+
+    .bot {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      align-self: flex-start;
+      border-bottom-left-radius: 2px;
+    }
+
+    .meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    footer {
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      padding: 14px 20px;
+    }
+
+    .input-row {
+      max-width: 900px;
+      margin: 0 auto;
+      display: flex;
+      gap: 10px;
+    }
+
+    #prompt {
+      flex: 1;
+      padding: 10px 14px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <header>
+    <strong>Local Llama UI</strong>
+    <div class="controls">
+      <select id="mode" onchange="toggleInputs()">
+        <option value="ollama">Direct Ollama (localhost:11434)</option>
+        <option value="converse">Custom API: POST /converse</option>
+        <option value="ask">Custom API: POST /ask</option>
+        <option value="topic">Custom API: POST /topic</option>
+      </select>
+      <input type="text" id="host" value="http://localhost:11434" style="width: 190px;" />
+      <input type="text" id="model" value="llama3.1:8b" style="width: 120px;" />
+      <button class="secondary" onclick="checkLearn()">GET /learn</button>
+      <button class="secondary" onclick="document.getElementById('chat').innerHTML=''">Clear</button>
+    </div>
+  </header>
+
+  <div id="chat">
+    <div class="msg bot">
+      <div class="meta">System</div>
+      Ready. Use <b>Direct Ollama</b> for your live local Llama 3.1:8b, or switch modes to test custom Flask/FastAPI
+      endpoints on port 5000.
+    </div>
+  </div>
+
+  <footer>
+    <div class="input-row">
+      <input type="text" id="prompt" placeholder="Type your message, question, or topic..."
+        onkeydown="if(event.key==='Enter') send()" />
+      <button onclick="send()">Send</button>
+    </div>
+  </footer>
+
+  <script>
+    const chat = document.getElementById('chat');
+    const hostInput = document.getElementById('host');
+    const modelInput = document.getElementById('model');
+
+    function toggleInputs() {
+      const mode = document.getElementById('mode').value;
+      if (mode === 'ollama') {
+        hostInput.value = 'http://localhost:11434';
+        modelInput.style.display = 'inline-block';
+      } else {
+        hostInput.value = 'http://localhost:5000';
+        modelInput.style.display = 'none';
+      }
+    }
+
+    function addMessage(sender, text, isUser = false) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + (isUser ? 'user' : 'bot');
+      div.innerHTML = `<div class="meta">${sender}</div>${text.replace(/</g, '&lt;')}`;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+      return div;
+    }
+
+    async function checkLearn() {
+      const host = hostInput.value.replace(/\/$/, '');
+      const mode = document.getElementById('mode').value;
+      const url = mode === 'ollama' ? `${host}/api/tags` : `${host}/learn`;
+      const bubble = addMessage('System', `Fetching ${url}...`);
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        bubble.innerHTML = `<div class="meta">GET ${url}</div>${JSON.stringify(data, null, 2)}`;
+      } catch (err) {
+        bubble.innerHTML = `<div class="meta">Error</div>Failed to reach ${url}. Is the server running?`;
+      }
+    }
+
+    async function send() {
+      const promptEl = document.getElementById('prompt');
+      const text = promptEl.value.trim();
+      if (!text) return;
+      promptEl.value = '';
+
+      const mode = document.getElementById('mode').value;
+      const host = hostInput.value.replace(/\/$/, '');
+      addMessage('You', text, true);
+      const botBubble = addMessage(mode.toUpperCase(), 'Thinking...');
+
+      try {
+        let url, body;
+        if (mode === 'ollama') {
+          url = `${host}/api/chat`;
+          body = { model: modelInput.value, messages: [{ role: 'user', content: text }], stream: false };
+        } else if (mode === 'converse') {
+          url = `${host}/converse`;
+          body = { message: text };
+        } else if (mode === 'ask') {
+          url = `${host}/ask`;
+          body = { question: text };
+        } else if (mode === 'topic') {
+          url = `${host}/topic`;
+          body = { topic: text };
+        }
+
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        const reply = mode === 'ollama' ? data.message?.content : (data.response || JSON.stringify(data));
+        botBubble.innerHTML = `<div class="meta">${url}</div>${(reply || 'No response').replace(/</g, '&lt;')}`;
+      } catch (err) {
+        botBubble.innerHTML = `<div class="meta">Connection Error</div>Could not connect to ${host}. Make sure Ollama (or your Python server) is running and CORS is allowed.`;
+      }
+    }
+  </script>
+</body>
+
+</html>

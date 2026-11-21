@@ -1,0 +1,8 @@
+venv/
+test_chroma_db/
+chroma_db/
+__pycache__/
+*.sqlite3
+*.db
+.webui_secret_key
+.env
