@@ -35,7 +35,7 @@ def get_active_system_prompt(extra_instruction: str = "") -> str:
 
 def ask_llama(prompt: str):
     res = ollama.chat(
-        model="llama3.1:8b",
+        model="llama3.2:3b",
         messages=[
             {"role": "system", "content": get_active_system_prompt()},
             {"role": "user", "content": prompt},
@@ -138,7 +138,7 @@ def rag_ask(data: dict):
     context_block = "\n".join(f"- {d}" for d in retrieved_docs)
 
     res = ollama.chat(
-        model="llama3.1:8b",
+        model="llama3.2:3b",
         messages=[
             {
                 "role": "system",
@@ -203,7 +203,7 @@ def web_rag(data: dict):
 
     web_context = "\n".join(snippets)
     res = ollama.chat(
-        model="llama3.1:8b",
+        model="llama3.2:3b",
         messages=[
             {
                 "role": "system",
