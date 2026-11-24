@@ -1,9 +1,11 @@
+import json
 import time
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import chromadb
 import ollama
 from ddgs import DDGS
+import yfinance as yf
 
 app = FastAPI()
 app.add_middleware(
@@ -12,6 +14,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+MODEL_NAME = "llama3.2:3b"
 
 # Persistent local ChromaDB storage
 chroma_client = chromadb.PersistentClient(path="./test_chroma_db")
@@ -35,7 +39,7 @@ def get_active_system_prompt(extra_instruction: str = "") -> str:
 
 def ask_llama(prompt: str):
     res = ollama.chat(
-        model="llama3.2:3b",
+        model=MODEL_NAME,
         messages=[
             {"role": "system", "content": get_active_system_prompt()},
             {"role": "user", "content": prompt},
@@ -47,7 +51,7 @@ def ask_llama(prompt: str):
 # --- Existing APIs (Unchanged Routes + Global Rules Active) ---
 @app.get("/learn")
 def learn():
-    return {"about": "Local Llama 3.1:8b API running on FastAPI"}
+    return {"about": f"Local {MODEL_NAME} API running on FastAPI"}
 
 
 @app.post("/converse")
@@ -138,7 +142,7 @@ def rag_ask(data: dict):
     context_block = "\n".join(f"- {d}" for d in retrieved_docs)
 
     res = ollama.chat(
-        model="llama3.2:3b",
+        model=MODEL_NAME,
         messages=[
             {
                 "role": "system",
@@ -203,7 +207,7 @@ def web_rag(data: dict):
 
     web_context = "\n".join(snippets)
     res = ollama.chat(
-        model="llama3.2:3b",
+        model=MODEL_NAME,
         messages=[
             {
                 "role": "system",
@@ -222,6 +226,109 @@ def web_rag(data: dict):
         "response": res["message"]["content"],
         "sources": sources,
     }
+
+
+# --- AI Agent Tools & Endpoint ---
+def get_nse_stock_price(ticker: str) -> str:
+    """Fetch the latest live stock price, day high/low, and previous close for an Indian NSE stock.
+    Args:
+        ticker: NSE ticker symbol ending in .NS (e.g., 'LAURUSLABS.NS', 'TCS.NS', 'RELIANCE.NS').
+    """
+    symbol = ticker.upper().strip()
+    if not symbol.endswith(".NS") and not symbol.endswith(".BO"):
+        symbol += ".NS"
+    try:
+        stock = yf.Ticker(symbol)
+        info = stock.fast_info
+        price = round(float(info.last_price), 2)
+        prev_close = round(float(info.previous_close), 2)
+        change_pct = round(((price - prev_close) / prev_close) * 100, 2)
+        return json.dumps({
+            "ticker": symbol,
+            "live_price_inr": price,
+            "prev_close_inr": prev_close,
+            "change_pct": f"{change_pct}%",
+            "day_high": round(float(info.day_high), 2),
+            "day_low": round(float(info.day_low), 2),
+        })
+    except Exception as e:
+        return json.dumps({"error": f"Could not fetch price for {symbol}: {e}"})
+
+
+def search_private_watchlist(query: str) -> str:
+    """Search the user's private ChromaDB memory for personal stock targets, stop-losses, or saved notes.
+    Args:
+        query: Company name or topic to search in private ChromaDB memory.
+    """
+    count = collection.count()
+    if count == 0:
+        return json.dumps({"status": "empty", "records": []})
+    q_emb = get_embedding(query)
+    results = collection.query(query_embeddings=[q_emb], n_results=min(3, count))
+    return json.dumps({"records": results["documents"][0]})
+
+
+def search_latest_stock_news(query: str) -> str:
+    """Search live internet news headlines for a stock or market event.
+    Args:
+        query: Stock name or market search query.
+    """
+    try:
+        with DDGS() as ddgs:
+            news = list(ddgs.news(query, max_results=3))
+        slim = [{"title": n.get("title", ""), "date": n.get("date", ""), "summary": n.get("body", "")} for n in news]
+        return json.dumps({"news": slim})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+AGENT_TOOLS = {
+    "get_nse_stock_price": get_nse_stock_price,
+    "search_private_watchlist": search_private_watchlist,
+    "search_latest_stock_news": search_latest_stock_news,
+}
+
+
+@app.post("/agent-ask")
+def agent_ask(data: dict):
+    question = data.get("question", "").strip()
+    tool_trace = []
+    messages = [
+        {
+            "role": "system",
+            "content": get_active_system_prompt(
+                "You are an autonomous market & personal research agent. "
+                "Use your tools to check the user's private ChromaDB watchlist, live NSE stock prices (.NS), "
+                "and latest news before answering. Never guess live prices."
+            ),
+        },
+        {"role": "user", "content": question},
+    ]
+
+    for _ in range(3):
+        res = ollama.chat(
+            model=MODEL_NAME,
+            messages=messages,
+            tools=[get_nse_stock_price, search_private_watchlist, search_latest_stock_news],
+        )
+        messages.append(res["message"])
+
+        if not res["message"].get("tool_calls"):
+            return {
+                "response": res["message"]["content"],
+                "tool_trace": tool_trace,
+            }
+
+        for tool_call in res["message"]["tool_calls"]:
+            fn_name = tool_call["function"]["name"]
+            fn_args = tool_call["function"]["arguments"]
+            fn = AGENT_TOOLS.get(fn_name)
+            output = fn(**fn_args) if fn else json.dumps({"error": "Unknown tool"})
+
+            tool_trace.append({"tool": fn_name, "args": fn_args, "output": output})
+            messages.append({"role": "tool", "name": fn_name, "content": output})
+
+    return {"response": "Agent reached max steps without a final reply.", "tool_trace": tool_trace}
 
 
 if __name__ == "__main__":

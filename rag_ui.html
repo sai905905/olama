@@ -325,6 +325,7 @@
                 <select id="mode" onchange="updateFlowLabel()">
                     <option value="rag">Smart RAG (DB First + Fallback Options)</option>
                     <option value="web">Internet & News Search (Web RAG)</option>
+                    <option value="agent">Agent Mode (ChromaDB + Live NSE + News Tools)</option>
                     <option value="direct">Llama 3.1 Model Only (No DB/Web)</option>
                 </select>
                 <button class="ghost" onclick="document.getElementById('chat').innerHTML=''">Clear Chat</button>
@@ -496,6 +497,24 @@
                 await runFallback(mode, encodeURIComponent(text));
                 return;
             }
+
+            if (mode === "agent") {
+                const botDiv = addBubble("AI AGENT (TOOLS + LLAMA)", "Planning & calling live tools...");
+                const res = await fetch(`${API}/agent-ask`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ question: text })
+                }).then(r => r.json());
+
+                let traceHtml = "";
+                if (res.tool_trace && res.tool_trace.length > 0) {
+                    traceHtml = `<div class="sources"><b>Tools Executed by Agent:</b><br>• ` +
+                    res.tool_trace.map(t => `${escapeHtml(t.tool)}(${escapeHtml(JSON.stringify(t.args))})`).join("<br>• ") +
+                    `</div>`;
+                }
+                botDiv.innerHTML = `<div class="meta">AI AGENT (TOOLS + LLAMA)</div>${escapeHtml(res.response)}${traceHtml}`;
+                return;
+                }
 
             const botDiv = addBubble("CHROMA RAG → LLAMA 3.1", "Searching ChromaDB...");
             try {
